@@ -22,7 +22,10 @@ public class RabbitMQConfig {
 
     @Bean
     public Queue filaPedidos(FilaPedidosProperties filaPedidosProperties) {
-        return QueueBuilder.durable(filaPedidosProperties.fila()).build();
+        return QueueBuilder.durable(filaPedidosProperties.fila())
+                .deadLetterExchange(filaPedidosProperties.exchangeDlq())
+                .deadLetterRoutingKey(filaPedidosProperties.filaDlq())
+                .build();
     }
 
     @Bean
@@ -38,6 +41,23 @@ public class RabbitMQConfig {
     }
 
     @Bean
+    public Queue filaPedidosDlq(FilaPedidosProperties filaPedidosProperties) {
+        return QueueBuilder.durable(filaPedidosProperties.filaDlq()).build();
+    }
+
+    @Bean
+    public DirectExchange exchangePedidosDlq(FilaPedidosProperties filaPedidosProperties) {
+        return new DirectExchange(filaPedidosProperties.exchangeDlq());
+    }
+
+    @Bean
+    public Binding bindingPedidosDlq(Queue filaPedidosDlq, DirectExchange exchangePedidosDlq, FilaPedidosProperties filaPedidosProperties) {
+        return BindingBuilder.bind(filaPedidosDlq)
+                .to(exchangePedidosDlq)
+                .with(filaPedidosProperties.filaDlq());
+    }
+
+    @Bean
     public MessageConverter messageConverter() {
         return new JacksonJsonMessageConverter();
     }
@@ -45,7 +65,7 @@ public class RabbitMQConfig {
     @Bean
     public MessageRecoverer messageRecoverer() {
         return (message, cause) -> {
-            log.error("Tentativas esgotadas! Mensagem descartada... - Fila: {} - Erro: {} - Corpo: {}",
+            log.error("Tentativas esgotadas! Enviando a mensagem para a DLQ... - Fila: {} - Erro: {} - Corpo: {}",
                     message.getMessageProperties().getConsumerQueue(),
                     NestedExceptionUtils.getMostSpecificCause(cause).getMessage(),
                     new String(message.getBody(), StandardCharsets.UTF_8));

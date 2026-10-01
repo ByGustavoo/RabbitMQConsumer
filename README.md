@@ -5,7 +5,7 @@
 <br>
 
 <div align="center">
-  Consumidor de mensagens em Spring Boot com RabbitMQ. Escuta a fila de pedidos alimentada pelo <a href="https://github.com/ByGustavoo/RabbitMQProducer">RabbitMQProducer</a>, converte cada mensagem JSON no evento PedidoCriado e processa o pedido, com retentativas, descarte de mensagens inválidas e logs em cada etapa.
+  Consumidor de mensagens em Spring Boot com RabbitMQ. Escuta a fila de pedidos alimentada pelo <a href="https://github.com/ByGustavoo/RabbitMQProducer">RabbitMQProducer</a>, converte cada mensagem JSON no evento PedidoCriado e processa o pedido, com retentativas, dead letter queue para as mensagens que falham e logs em cada etapa.
 </div>
 
 <br> <br>
@@ -41,13 +41,15 @@ RabbitMQProducer ──► pedidos.exchange ──► pedidos.criados ──► 
 
 * **Processamento:** o `PedidoService` valida o pedido (e-mail presente e valor maior que zero) e simula o envio do e-mail de confirmação, registrando cada passo no log.
 
-* **Topologia:** o `RabbitMQConfig` declara a mesma fila, exchange e binding do produtor. A declaração é idempotente, então qualquer um dos dois projetos pode subir primeiro.
+* **Topologia:** o `RabbitMQConfig` declara a mesma fila, exchange, binding e DLQ do produtor, com os mesmos argumentos. A declaração é idempotente, então qualquer um dos dois projetos pode subir primeiro.
+
+* **Dead letter queue:** a fila principal é declarada com `x-dead-letter-exchange` apontando para a `DirectExchange` `pedidos.dlx`, ligada à fila `pedidos.criados.dlq`. Uma mensagem rejeitada sai da fila principal e cai na DLQ, com o cabeçalho `x-death` dizendo de onde veio e por quê.
 
 * **Confirmação:** o ack é automático: a mensagem sai da fila quando o processamento termina sem erro.
 
 * **Retentativas:** se o processamento falhar, a mensagem é tentada de novo até 3 vezes, com espera de 1 s, 2 s e 4 s.
 
-* **Descarte:** esgotadas as retentativas, o `MessageRecoverer` registra um log de erro com o motivo e o corpo da mensagem e a rejeita sem recolocar na fila. Uma mensagem com JSON inválido segue o mesmo caminho.
+* **Descarte para a DLQ:** esgotadas as retentativas, o `MessageRecoverer` registra um log de erro com o motivo e o corpo da mensagem e a rejeita sem recolocar na fila, e o RabbitMQ a move para a `pedidos.criados.dlq`. Uma mensagem com JSON inválido segue o mesmo caminho.
 
 * **Vazão:** cada consumidor busca até 10 mensagens por vez (`prefetch`), e o Spring sobe de 1 até 3 consumidores conforme a fila cresce.
 
@@ -63,7 +65,7 @@ Configurados no `log4j2.xml`: console colorido em todos os perfis e arquivo diá
 | Início do processamento | `INFO` | `Processando o pedido...` |
 | Pedido válido | `INFO` | `Enviando o e-mail de confirmação...` e `Pedido processado!` |
 | Pedido inválido (a cada tentativa) | `WARN` | `Pedido sem e-mail do cliente!` ou `Pedido com valor inválido!` |
-| Tentativas esgotadas | `ERROR` | `Tentativas esgotadas! Mensagem descartada...`, com a fila, o erro e o corpo |
+| Tentativas esgotadas | `ERROR` | `Tentativas esgotadas! Enviando a mensagem para a DLQ...`, com a fila, o erro e o corpo |
 
 Exemplo de um pedido processado:
 
@@ -125,6 +127,8 @@ curl -X POST http://localhost:9019/RabbitMQProducer/v1/pedidos \
   -d '{"cliente":"Maria Souza","email":"maria.souza@email.com","valor":249.90}'
 ```
 
+Se a fila `pedidos.criados` já existir no seu RabbitMQ sem a DLQ, apague-a uma vez (painel › **Queues and Streams** › `pedidos.criados` › **Delete**) antes de subir a aplicação: o RabbitMQ recusa redeclarar uma fila com argumentos diferentes (`PRECONDITION_FAILED`).
+
 O consumidor não tem porta HTTP: é um worker que só escuta a fila. As mensagens que chegaram antes
 de ele subir ficam guardadas na fila durável e são processadas assim que ele se conecta.
 
@@ -133,7 +137,7 @@ de ele subir ficam guardadas na fila durável e são processadas assim que ele s
 ## 🧪 Testes e Build
 
 Os testes sobem o contexto completo contra o RabbitMQ real, então ele precisa estar no ar. O perfil
-`test` escuta uma fila própria (`pedidos.criados.test`), separada da de desenvolvimento.
+`test` escuta uma fila própria (`pedidos.criados.test`, com a DLQ `pedidos.criados.test.dlq`), separada da de desenvolvimento.
 
 ```bash
 # Testes
@@ -150,7 +154,7 @@ Os testes sobem o contexto completo contra o RabbitMQ real, então ele precisa e
 ```
 src/main/java/br/com/rabbitmqconsumer
 ├── RabbitMQConsumerApplication.java   # Classe de inicialização
-├── config                             # RabbitMQConfig (fila, exchange, binding, JSON e descarte) e FilaPedidosProperties
+├── config                             # RabbitMQConfig (fila, exchange, binding, DLQ, JSON e descarte) e FilaPedidosProperties
 ├── consumer                           # PedidoConsumer, o @RabbitListener da fila de pedidos
 ├── exceptions                         # PedidoInvalidoException
 ├── model/event                        # PedidoCriadoEvent, o corpo da mensagem
@@ -165,9 +169,9 @@ src/main/resources
 
 ## ⚠️ Limitações
 
-* Uma mensagem descartada some da fila: o log de erro guarda o corpo dela, mas não há dead letter queue. Adicionar uma exige declarar a fila com `x-dead-letter-exchange` nos dois projetos, porque o RabbitMQ recusa a mesma fila com argumentos diferentes.
+* Nada consome a `pedidos.criados.dlq`: as mensagens ficam paradas lá para inspeção. Reprocessar exige movê-las de volta, com o plugin Shovel (que não vem habilitado na imagem) ou com outro consumidor.
 
-* Um JSON inválido nunca vai dar certo, mas passa pelas mesmas retentativas antes do descarte.
+* Um JSON inválido nunca vai dar certo, mas passa pelas mesmas retentativas antes de ir para a DLQ.
 
 <br>
 

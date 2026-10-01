@@ -19,7 +19,7 @@ Worker de mensageria de estudo, sem consumidores externos. Release: commit numer
 
 ## Estrutura
 
-- `config/` — `RabbitMQConfig` (fila, exchange, binding, conversor JSON e `MessageRecoverer`) e `FilaPedidosProperties` (`rabbitmq.pedidos.*`)
+- `config/` — `RabbitMQConfig` (fila, exchange, binding, DLQ `pedidos.criados.dlq` na exchange `pedidos.dlx`, conversor JSON e `MessageRecoverer`) e `FilaPedidosProperties` (`rabbitmq.pedidos.*`)
 - `consumer/` — `PedidoConsumer`, o `@RabbitListener`
 - `service/pedido/` — `PedidoService`, a validação e o processamento
 - `model/event/` — `PedidoCriadoEvent`, cópia do record do produtor
@@ -51,6 +51,9 @@ Worker de mensageria de estudo, sem consumidores externos. Release: commit numer
 
 - No Spring Boot 4, `spring.rabbitmq.listener.simple.retry.max-attempts` foi removido e é ignorado em
   silêncio; a propriedade é `max-retries` (retentativas além da primeira tentativa).
-- Sem dead letter queue, mensagem rejeitada é perdida; o corpo fica só no log de erro.
+- Mensagem rejeitada vai para a `pedidos.criados.dlq` por causa dos argumentos de dead letter da fila
+  principal; o `MessageRecoverer` só loga e rejeita. Nada consome a DLQ.
+- Mudar os argumentos da fila exige apagar a fila existente no RabbitMQ uma vez, senão a declaração
+  falha com `PRECONDITION_FAILED`.
 - O aviso `Error opening zip file ... byte-buddy-agent` no `./gradlew test` vem do caminho do usuário
   com acento e não afeta os testes.
