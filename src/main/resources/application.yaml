@@ -1,0 +1,42 @@
+logging:
+  config: classpath:log4j2.xml
+
+spring:
+  application:
+    name: rabbitmqconsumer
+
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USER:rabbitmq}
+    password: ${RABBITMQ_PASSWORD:rabbitmq}
+    listener:
+      simple:
+        prefetch: 10
+        concurrency: 1
+        max-concurrency: 3
+        default-requeue-rejected: false
+        retry:
+          enabled: true
+          max-retries: 3
+          initial-interval: 1s
+          multiplier: 2
+
+rabbitmq:
+  pedidos:
+    fila: pedidos.criados
+    exchange: pedidos.exchange
+    routing-key: pedido.criado
+
+---
+
+spring:
+  config:
+    activate:
+      on-profile: test
+
+rabbitmq:
+  pedidos:
+    fila: pedidos.criados.test
+    exchange: pedidos.exchange.test
+    routing-key: pedido.criado.test
